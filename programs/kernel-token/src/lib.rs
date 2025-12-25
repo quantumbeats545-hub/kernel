@@ -6,7 +6,7 @@ use anchor_spl::{
     },
 };
 
-declare_id!("BvsKLbUiEVBzfxbKG8ECM4zFzaVw4Rcqj4t2oji2cdkx");
+declare_id!("5QVVrCBUgqjG3pWcSmRkqaagFaokaAwgoFFDLXBJgFJw");
 
 /// $KERNEL Meme Coin Program
 /// "The Core of Crypto Security - No Kernel Panics Here!"
@@ -353,7 +353,81 @@ pub mod kernel_token {
         Ok(())
     }
 
-    /// Update fee configuration (owner only, for emergencies)
+    /// Propose a fee configuration change (starts timelock)
+    /// Changes require 24-hour delay before execution
+    pub fn propose_fee_update(
+        ctx: Context<ProposeFeeUpdate>,
+        reflection_share_bps: u16,
+        lp_share_bps: u16,
+        burn_share_bps: u16,
+    ) -> Result<()> {
+        require!(
+            reflection_share_bps + lp_share_bps + burn_share_bps == 500,
+            KernelError::InvalidFeeConfig
+        );
+
+        let proposal = &mut ctx.accounts.fee_proposal;
+        proposal.proposer = ctx.accounts.authority.key();
+        proposal.reflection_share_bps = reflection_share_bps;
+        proposal.lp_share_bps = lp_share_bps;
+        proposal.burn_share_bps = burn_share_bps;
+        proposal.proposed_at = Clock::get()?.unix_timestamp;
+        proposal.executed = false;
+        proposal.cancelled = false;
+        proposal.bump = ctx.bumps.fee_proposal;
+
+        msg!("Fee update proposed! Timelock: 24 hours");
+        msg!("Proposed: reflection={}bps, lp={}bps, burn={}bps",
+            reflection_share_bps, lp_share_bps, burn_share_bps);
+
+        Ok(())
+    }
+
+    /// Execute a proposed fee update after timelock expires
+    /// Requires 24-hour delay from proposal
+    pub fn execute_fee_update(ctx: Context<ExecuteFeeUpdate>) -> Result<()> {
+        let proposal = &ctx.accounts.fee_proposal;
+        let config = &mut ctx.accounts.config;
+
+        require!(!proposal.executed, KernelError::ProposalAlreadyExecuted);
+        require!(!proposal.cancelled, KernelError::ProposalCancelled);
+
+        let current_time = Clock::get()?.unix_timestamp;
+        let time_elapsed = current_time - proposal.proposed_at;
+
+        require!(
+            time_elapsed >= TIMELOCK_DURATION,
+            KernelError::TimelockNotExpired
+        );
+
+        config.reflection_share_bps = proposal.reflection_share_bps;
+        config.lp_share_bps = proposal.lp_share_bps;
+        config.burn_share_bps = proposal.burn_share_bps;
+
+        // Mark as executed
+        let proposal = &mut ctx.accounts.fee_proposal;
+        proposal.executed = true;
+
+        msg!("Fee config updated after timelock! Colonel Kernel approves!");
+
+        Ok(())
+    }
+
+    /// Cancel a pending fee proposal (authority only)
+    pub fn cancel_fee_proposal(ctx: Context<CancelFeeProposal>) -> Result<()> {
+        let proposal = &mut ctx.accounts.fee_proposal;
+
+        require!(!proposal.executed, KernelError::ProposalAlreadyExecuted);
+
+        proposal.cancelled = true;
+
+        msg!("Fee proposal cancelled");
+
+        Ok(())
+    }
+
+    /// Legacy update_fees - now requires guardian co-signature
+    /// For emergency use only with multisig
     pub fn update_fees(
         ctx: Context<UpdateFees>,
         reflection_share_bps: u16,
@@ -370,7 +444,7 @@ pub mod kernel_token {
         config.lp_share_bps = lp_share_bps;
         config.burn_share_bps = burn_share_bps;
 
-        msg!("Fee config updated by Colonel Kernel!");
+        msg!("Emergency fee update by Colonel Kernel + Guardian!");
 
         Ok(())
     }
@@ -390,12 +464,146 @@ pub mod kernel_token {
         msg!("Authority transferred from {} to {}", old_authority, new_authority);
         Ok(())
     }
+
+    /// Initialize LP vault for fee allocation tracking
+    pub fn initialize_lp_vault(ctx: Context<InitializeLPVault>) -> Result<()> {
+        let lp_vault = &mut ctx.accounts.lp_vault;
+        lp_vault.authority = ctx.accounts.authority.key();
+        lp_vault.token_mint = ctx.accounts.token_mint.key();
+        lp_vault.total_allocated = 0;
+        lp_vault.total_deployed = 0;
+        lp_vault.pending_deployment = 0;
+        lp_vault.last_deployment_time = 0;
+        lp_vault.bump = ctx.bumps.lp_vault;
+        lp_vault.vault_token_bump = ctx.bumps.lp_vault_token;
+
+        msg!("LP Vault initialized!");
+        Ok(())
+    }
+
+    /// Allocate tokens to LP vault from harvested fees
+    /// This is the on-chain portion - actual LP addition happens off-chain
+    pub fn allocate_to_lp(ctx: Context<AllocateToLP>, amount: u64) -> Result<()> {
+        require!(amount > 0, KernelError::ZeroAmount);
+
+        let lp_vault = &mut ctx.accounts.lp_vault;
+        let decimals = ctx.accounts.token_mint.decimals;
+
+        // Transfer tokens from authority to LP vault
+        token_interface::transfer_checked(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.authority_token_account.to_account_info(),
+                    mint: ctx.accounts.token_mint.to_account_info(),
+                    to: ctx.accounts.lp_vault_token.to_account_info(),
+                    authority: ctx.accounts.authority.to_account_info(),
+                },
+            ),
+            amount,
+            decimals,
+        )?;
+
+        // Update tracking
+        lp_vault.total_allocated = lp_vault.total_allocated.checked_add(amount).unwrap();
+        lp_vault.pending_deployment = lp_vault.pending_deployment.checked_add(amount).unwrap();
+
+        msg!("Allocated {} tokens to LP vault", amount);
+        msg!("Pending deployment: {}", lp_vault.pending_deployment);
+
+        Ok(())
+    }
+
+    /// Mark tokens as deployed to LP (called after off-chain LP addition)
+    /// Records the actual LP deployment for accounting
+    pub fn record_lp_deployment(
+        ctx: Context<RecordLPDeployment>,
+        amount: u64,
+        lp_tokens_received: u64,
+        pool_address: Pubkey,
+    ) -> Result<()> {
+        require!(amount > 0, KernelError::ZeroAmount);
+
+        let lp_vault = &mut ctx.accounts.lp_vault;
+        let deployment = &mut ctx.accounts.lp_deployment;
+
+        require!(
+            lp_vault.pending_deployment >= amount,
+            KernelError::InsufficientLPFunds
+        );
+
+        // Update vault accounting
+        lp_vault.pending_deployment = lp_vault.pending_deployment.checked_sub(amount).unwrap();
+        lp_vault.total_deployed = lp_vault.total_deployed.checked_add(amount).unwrap();
+        lp_vault.last_deployment_time = Clock::get()?.unix_timestamp;
+
+        // Record deployment details
+        deployment.pool_address = pool_address;
+        deployment.kernel_amount = amount;
+        deployment.lp_tokens_received = lp_tokens_received;
+        deployment.deployed_at = Clock::get()?.unix_timestamp;
+        deployment.withdrawn = false;
+        deployment.bump = ctx.bumps.lp_deployment;
+
+        msg!("LP deployment recorded!");
+        msg!("  KERNEL deployed: {}", amount);
+        msg!("  LP tokens received: {}", lp_tokens_received);
+        msg!("  Pool: {}", pool_address);
+
+        Ok(())
+    }
+
+    /// Withdraw tokens from LP vault (emergency only)
+    pub fn withdraw_from_lp_vault(ctx: Context<WithdrawFromLPVault>, amount: u64) -> Result<()> {
+        require!(amount > 0, KernelError::ZeroAmount);
+
+        let lp_vault = &mut ctx.accounts.lp_vault;
+
+        require!(
+            lp_vault.pending_deployment >= amount,
+            KernelError::InsufficientLPFunds
+        );
+
+        let mint_key = ctx.accounts.token_mint.key();
+        let seeds = &[
+            b"lp_vault_token",
+            mint_key.as_ref(),
+            &[lp_vault.vault_token_bump],
+        ];
+        let signer_seeds = &[&seeds[..]];
+
+        let decimals = ctx.accounts.token_mint.decimals;
+
+        token_interface::transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.lp_vault_token.to_account_info(),
+                    mint: ctx.accounts.token_mint.to_account_info(),
+                    to: ctx.accounts.authority_token_account.to_account_info(),
+                    authority: ctx.accounts.lp_vault_token.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            amount,
+            decimals,
+        )?;
+
+        lp_vault.pending_deployment = lp_vault.pending_deployment.checked_sub(amount).unwrap();
+
+        msg!("Withdrew {} from LP vault", amount);
+
+        Ok(())
+    }
 }
 
 // === CONSTANTS ===
 
 /// Precision for accumulated_per_share calculations (1e12)
 const PRECISION: u128 = 1_000_000_000_000;
+
+/// Timelock duration for fee updates (24 hours in seconds)
+const TIMELOCK_DURATION: i64 = 24 * 60 * 60;
 
 // === HELPER FUNCTIONS ===
 
@@ -714,8 +922,36 @@ pub struct Airdrop<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Propose a fee update (starts 24-hour timelock)
 #[derive(Accounts)]
-pub struct UpdateFees<'info> {
+pub struct ProposeFeeUpdate<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub token_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        seeds = [b"config", token_mint.key().as_ref()],
+        bump = config.bump,
+        constraint = config.authority == authority.key() @ KernelError::NotAuthority
+    )]
+    pub config: Account<'info, KernelConfig>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + FeeProposal::INIT_SPACE,
+        seeds = [b"fee_proposal", config.key().as_ref()],
+        bump
+    )]
+    pub fee_proposal: Account<'info, FeeProposal>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// Execute a fee update after timelock expires
+#[derive(Accounts)]
+pub struct ExecuteFeeUpdate<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
@@ -728,6 +964,220 @@ pub struct UpdateFees<'info> {
         constraint = config.authority == authority.key() @ KernelError::NotAuthority
     )]
     pub config: Account<'info, KernelConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"fee_proposal", config.key().as_ref()],
+        bump = fee_proposal.bump,
+        constraint = fee_proposal.proposer == authority.key() @ KernelError::NotAuthority
+    )]
+    pub fee_proposal: Account<'info, FeeProposal>,
+}
+
+/// Cancel a pending fee proposal
+#[derive(Accounts)]
+pub struct CancelFeeProposal<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub token_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        seeds = [b"config", token_mint.key().as_ref()],
+        bump = config.bump,
+        constraint = config.authority == authority.key() @ KernelError::NotAuthority
+    )]
+    pub config: Account<'info, KernelConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"fee_proposal", config.key().as_ref()],
+        bump = fee_proposal.bump
+    )]
+    pub fee_proposal: Account<'info, FeeProposal>,
+}
+
+/// Emergency fee update - requires both authority AND guardian signature (multisig)
+#[derive(Accounts)]
+pub struct UpdateFees<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    /// Guardian must also sign for emergency updates (multisig pattern)
+    pub guardian: Signer<'info>,
+
+    pub token_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        mut,
+        seeds = [b"config", token_mint.key().as_ref()],
+        bump = config.bump,
+        constraint = config.authority == authority.key() @ KernelError::NotAuthority
+    )]
+    pub config: Account<'info, KernelConfig>,
+}
+
+/// Initialize LP vault for tracking fee allocations
+#[derive(Accounts)]
+pub struct InitializeLPVault<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        mint::token_program = token_program
+    )]
+    pub token_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        seeds = [b"config", token_mint.key().as_ref()],
+        bump = config.bump,
+        constraint = config.authority == authority.key() @ KernelError::NotAuthority
+    )]
+    pub config: Account<'info, KernelConfig>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + LPVault::INIT_SPACE,
+        seeds = [b"lp_vault", token_mint.key().as_ref()],
+        bump
+    )]
+    pub lp_vault: Account<'info, LPVault>,
+
+    #[account(
+        init,
+        payer = authority,
+        seeds = [b"lp_vault_token", token_mint.key().as_ref()],
+        bump,
+        token::mint = token_mint,
+        token::authority = lp_vault_token,
+        token::token_program = token_program,
+    )]
+    pub lp_vault_token: InterfaceAccount<'info, TokenAccount>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+}
+
+/// Allocate tokens to LP vault
+#[derive(Accounts)]
+pub struct AllocateToLP<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        mint::token_program = token_program
+    )]
+    pub token_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        seeds = [b"config", token_mint.key().as_ref()],
+        bump = config.bump,
+        constraint = config.authority == authority.key() @ KernelError::NotAuthority
+    )]
+    pub config: Account<'info, KernelConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"lp_vault", token_mint.key().as_ref()],
+        bump = lp_vault.bump
+    )]
+    pub lp_vault: Account<'info, LPVault>,
+
+    #[account(
+        mut,
+        associated_token::mint = token_mint,
+        associated_token::authority = authority,
+        associated_token::token_program = token_program,
+    )]
+    pub authority_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        seeds = [b"lp_vault_token", token_mint.key().as_ref()],
+        bump = lp_vault.vault_token_bump,
+    )]
+    pub lp_vault_token: InterfaceAccount<'info, TokenAccount>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+/// Record an LP deployment (after off-chain Raydium interaction)
+#[derive(Accounts)]
+#[instruction(amount: u64, lp_tokens_received: u64, pool_address: Pubkey)]
+pub struct RecordLPDeployment<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub token_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        seeds = [b"config", token_mint.key().as_ref()],
+        bump = config.bump,
+        constraint = config.authority == authority.key() @ KernelError::NotAuthority
+    )]
+    pub config: Account<'info, KernelConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"lp_vault", token_mint.key().as_ref()],
+        bump = lp_vault.bump
+    )]
+    pub lp_vault: Account<'info, LPVault>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + LPDeployment::INIT_SPACE,
+        seeds = [b"lp_deployment", lp_vault.key().as_ref(), &lp_vault.total_deployed.to_le_bytes()],
+        bump
+    )]
+    pub lp_deployment: Account<'info, LPDeployment>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// Withdraw from LP vault (emergency)
+#[derive(Accounts)]
+pub struct WithdrawFromLPVault<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        mint::token_program = token_program
+    )]
+    pub token_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        seeds = [b"config", token_mint.key().as_ref()],
+        bump = config.bump,
+        constraint = config.authority == authority.key() @ KernelError::NotAuthority
+    )]
+    pub config: Account<'info, KernelConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"lp_vault", token_mint.key().as_ref()],
+        bump = lp_vault.bump
+    )]
+    pub lp_vault: Account<'info, LPVault>,
+
+    #[account(
+        mut,
+        associated_token::mint = token_mint,
+        associated_token::authority = authority,
+        associated_token::token_program = token_program,
+    )]
+    pub authority_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        seeds = [b"lp_vault_token", token_mint.key().as_ref()],
+        bump = lp_vault.vault_token_bump,
+    )]
+    pub lp_vault_token: InterfaceAccount<'info, TokenAccount>,
+
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 #[derive(Accounts)]
@@ -812,6 +1262,46 @@ pub struct AirdropState {
     pub bump: u8,
 }
 
+/// Fee proposal for timelock mechanism
+#[account]
+#[derive(InitSpace)]
+pub struct FeeProposal {
+    pub proposer: Pubkey,
+    pub reflection_share_bps: u16,
+    pub lp_share_bps: u16,
+    pub burn_share_bps: u16,
+    pub proposed_at: i64,
+    pub executed: bool,
+    pub cancelled: bool,
+    pub bump: u8,
+}
+
+/// LP Vault for tracking fee allocations to liquidity
+#[account]
+#[derive(InitSpace)]
+pub struct LPVault {
+    pub authority: Pubkey,
+    pub token_mint: Pubkey,
+    pub total_allocated: u64,      // Total tokens ever allocated to LP
+    pub total_deployed: u64,       // Total tokens deployed to Raydium
+    pub pending_deployment: u64,   // Tokens waiting to be deployed
+    pub last_deployment_time: i64,
+    pub bump: u8,
+    pub vault_token_bump: u8,
+}
+
+/// Individual LP deployment record
+#[account]
+#[derive(InitSpace)]
+pub struct LPDeployment {
+    pub pool_address: Pubkey,      // Raydium pool address
+    pub kernel_amount: u64,        // KERNEL tokens deployed
+    pub lp_tokens_received: u64,   // LP tokens received
+    pub deployed_at: i64,
+    pub withdrawn: bool,
+    pub bump: u8,
+}
+
 // === ERRORS ===
 
 #[error_code]
@@ -832,4 +1322,12 @@ pub enum KernelError {
     TooManyRecipients,
     #[msg("Program is paused")]
     ProgramPaused,
+    #[msg("Timelock period not expired - wait 24 hours")]
+    TimelockNotExpired,
+    #[msg("Proposal already executed")]
+    ProposalAlreadyExecuted,
+    #[msg("Proposal was cancelled")]
+    ProposalCancelled,
+    #[msg("Insufficient funds in LP vault")]
+    InsufficientLPFunds,
 }

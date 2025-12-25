@@ -8,16 +8,16 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-kernel_token = "BvsKLbUiEVBzfxbKG8ECM4zFzaVw4Rcqj4t2oji2cdkx"
+kernel_token = "5QVVrCBUgqjG3pWcSmRkqaagFaokaAwgoFFDLXBJgFJw"
 
 [programs.devnet]
-kernel_token = "BvsKLbUiEVBzfxbKG8ECM4zFzaVw4Rcqj4t2oji2cdkx"
+kernel_token = "5QVVrCBUgqjG3pWcSmRkqaagFaokaAwgoFFDLXBJgFJw"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "devnet"
+cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

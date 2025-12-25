@@ -282,8 +282,10 @@ describe("kernel-token", () => {
           systemProgram: SystemProgram.programId,
         })
         .signers([user1])
-        .rpc();
+        .rpc({ commitment: "confirmed" });
 
+      // Wait for confirmation
+      await connection.confirmTransaction(tx, "confirmed");
       console.log("Stake tx:", tx);
 
       // Verify user stake
@@ -408,8 +410,10 @@ describe("kernel-token", () => {
           tokenProgram: TOKEN_2022_PROGRAM_ID,
         })
         .signers([user1])
-        .rpc();
+        .rpc({ commitment: "confirmed" });
 
+      // Wait for confirmation
+      await connection.confirmTransaction(tx, "confirmed");
       console.log("Unstake tx:", tx);
 
       // Verify stake decreased
@@ -478,8 +482,10 @@ describe("kernel-token", () => {
           tokenProgram: TOKEN_2022_PROGRAM_ID,
         })
         .signers([authority])
-        .rpc();
+        .rpc({ commitment: "confirmed" });
 
+      // Wait for confirmation
+      await connection.confirmTransaction(tx, "confirmed");
       console.log("Deposit reflections tx:", tx);
 
       // Verify reflection pool balance
@@ -522,8 +528,10 @@ describe("kernel-token", () => {
           tokenProgram: TOKEN_2022_PROGRAM_ID,
         })
         .signers([user1])
-        .rpc();
+        .rpc({ commitment: "confirmed" });
 
+      // Wait for confirmation
+      await connection.confirmTransaction(tx, "confirmed");
       console.log("Claim reflections tx:", tx);
 
       // Verify balance increased (received reflections)
@@ -597,8 +605,10 @@ describe("kernel-token", () => {
           systemProgram: SystemProgram.programId,
         })
         .signers([authority])
-        .rpc();
+        .rpc({ commitment: "confirmed" });
 
+      // Wait for confirmation
+      await connection.confirmTransaction(tx, "confirmed");
       console.log("Burn tx:", tx);
 
       // Verify supply decreased
