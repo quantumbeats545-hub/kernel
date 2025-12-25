@@ -358,7 +358,7 @@ describe("kernel-token", () => {
 
       const stakeBefore = await program.account.userStake.fetch(userStakePda);
 
-      await program.methods
+      const tx = await program.methods
         .stake(additionalAmount)
         .accounts({
           owner: user1.publicKey,
@@ -371,7 +371,10 @@ describe("kernel-token", () => {
           systemProgram: SystemProgram.programId,
         })
         .signers([user1])
-        .rpc();
+        .rpc({ commitment: "confirmed" });
+
+      // Wait for confirmation
+      await connection.confirmTransaction(tx, "confirmed");
 
       const stakeAfter = await program.account.userStake.fetch(userStakePda);
       assert.equal(
@@ -398,15 +401,6 @@ describe("kernel-token", () => {
         TOKEN_2022_PROGRAM_ID
       );
 
-      // Debug: check vault balance before
-      const vaultBefore = await getAccount(
-        connection,
-        stakingVaultPda,
-        "confirmed",
-        TOKEN_2022_PROGRAM_ID
-      );
-      console.log("Vault balance before:", vaultBefore.amount.toString());
-
       const tx = await program.methods
         .unstake(unstakeAmount)
         .accounts({
@@ -428,33 +422,18 @@ describe("kernel-token", () => {
 
       // Verify stake decreased
       const stakeAfter = await program.account.userStake.fetch(userStakePda);
-      console.log("Stake before:", stakeBefore.stakedAmount.toString());
-      console.log("Stake after:", stakeAfter.stakedAmount.toString());
       assert.equal(
         stakeAfter.stakedAmount.toNumber(),
         stakeBefore.stakedAmount.toNumber() - unstakeAmount.toNumber()
       );
 
-      // Verify balance increased - fetch fresh with confirmed commitment
+      // Verify balance increased
       const balanceAfter = await getAccount(
         connection,
         user1TokenAccount,
         "confirmed",
         TOKEN_2022_PROGRAM_ID
       );
-      console.log("Balance before:", balanceBefore.amount.toString());
-      console.log("Balance after:", balanceAfter.amount.toString());
-      console.log("Expected increase:", unstakeAmount.toNumber());
-
-      // Debug: check vault balance after
-      const vaultAfter = await getAccount(
-        connection,
-        stakingVaultPda,
-        "confirmed",
-        TOKEN_2022_PROGRAM_ID
-      );
-      console.log("Vault balance after:", vaultAfter.amount.toString());
-
       assert.equal(
         Number(balanceAfter.amount) - Number(balanceBefore.amount),
         unstakeAmount.toNumber()
