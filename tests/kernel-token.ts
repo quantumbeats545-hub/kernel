@@ -398,6 +398,15 @@ describe("kernel-token", () => {
         TOKEN_2022_PROGRAM_ID
       );
 
+      // Debug: check vault balance before
+      const vaultBefore = await getAccount(
+        connection,
+        stakingVaultPda,
+        "confirmed",
+        TOKEN_2022_PROGRAM_ID
+      );
+      console.log("Vault balance before:", vaultBefore.amount.toString());
+
       const tx = await program.methods
         .unstake(unstakeAmount)
         .accounts({
@@ -410,26 +419,42 @@ describe("kernel-token", () => {
           tokenProgram: TOKEN_2022_PROGRAM_ID,
         })
         .signers([user1])
-        .rpc({ commitment: "confirmed" });
+        .rpc({ commitment: "confirmed", skipPreflight: true });
 
-      // Wait for confirmation
+      // Wait for confirmation and state propagation
       await connection.confirmTransaction(tx, "confirmed");
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       console.log("Unstake tx:", tx);
 
       // Verify stake decreased
       const stakeAfter = await program.account.userStake.fetch(userStakePda);
+      console.log("Stake before:", stakeBefore.stakedAmount.toString());
+      console.log("Stake after:", stakeAfter.stakedAmount.toString());
       assert.equal(
         stakeAfter.stakedAmount.toNumber(),
         stakeBefore.stakedAmount.toNumber() - unstakeAmount.toNumber()
       );
 
-      // Verify balance increased
+      // Verify balance increased - fetch fresh with confirmed commitment
       const balanceAfter = await getAccount(
         connection,
         user1TokenAccount,
         "confirmed",
         TOKEN_2022_PROGRAM_ID
       );
+      console.log("Balance before:", balanceBefore.amount.toString());
+      console.log("Balance after:", balanceAfter.amount.toString());
+      console.log("Expected increase:", unstakeAmount.toNumber());
+
+      // Debug: check vault balance after
+      const vaultAfter = await getAccount(
+        connection,
+        stakingVaultPda,
+        "confirmed",
+        TOKEN_2022_PROGRAM_ID
+      );
+      console.log("Vault balance after:", vaultAfter.amount.toString());
+
       assert.equal(
         Number(balanceAfter.amount) - Number(balanceBefore.amount),
         unstakeAmount.toNumber()
