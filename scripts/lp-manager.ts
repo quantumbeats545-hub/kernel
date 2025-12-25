@@ -21,7 +21,7 @@ import {
 import * as fs from 'fs';
 
 // Configuration
-const KERNEL_MINT = new PublicKey('7c3nWjin5q92RW9LBxeK9JHuPiAHaStXx8YLBLjVyJgN');
+const KERNEL_MINT = new PublicKey('61haxRk7djifSYwso9Kzt9NtPB9oB9QwQyQZBoiv47Dk');
 const WSOL_MINT = new PublicKey('So11111111111111111111111111111111111111112');
 const RPC_ENDPOINT = process.env.RPC_ENDPOINT || 'https://api.devnet.solana.com';
 

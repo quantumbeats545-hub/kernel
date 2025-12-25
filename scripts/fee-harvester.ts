@@ -25,7 +25,7 @@ import * as path from 'path';
 
 // Configuration
 const KERNEL_PROGRAM_ID = new PublicKey('BvsKLbUiEVBzfxbKG8ECM4zFzaVw4Rcqj4t2oji2cdkx');
-const KERNEL_MINT = new PublicKey('7c3nWjin5q92RW9LBxeK9JHuPiAHaStXx8YLBLjVyJgN');
+const KERNEL_MINT = new PublicKey('61haxRk7djifSYwso9Kzt9NtPB9oB9QwQyQZBoiv47Dk');
 const RPC_ENDPOINT = process.env.RPC_ENDPOINT || 'https://api.devnet.solana.com';
 
 // Fee distribution (out of 500 bps = 5%)
