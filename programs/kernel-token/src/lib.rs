@@ -456,12 +456,68 @@ pub mod kernel_token {
         Ok(())
     }
 
-    /// Transfer authority to a new address
-    pub fn transfer_authority(ctx: Context<TransferAuthority>, new_authority: Pubkey) -> Result<()> {
+    /// Propose authority transfer (starts 24-hour timelock)
+    /// Changes require 24-hour delay before execution for security
+    pub fn propose_authority_transfer(
+        ctx: Context<ProposeAuthorityTransfer>,
+        new_authority: Pubkey,
+    ) -> Result<()> {
+        let transfer = &mut ctx.accounts.pending_transfer;
+        transfer.proposer = ctx.accounts.authority.key();
+        transfer.new_authority = new_authority;
+        transfer.proposed_at = Clock::get()?.unix_timestamp;
+        transfer.executed = false;
+        transfer.cancelled = false;
+        transfer.bump = ctx.bumps.pending_transfer;
+
+        msg!("Authority transfer proposed! Timelock: 24 hours");
+        msg!("Current authority: {}", ctx.accounts.authority.key());
+        msg!("Proposed new authority: {}", new_authority);
+
+        Ok(())
+    }
+
+    /// Execute a proposed authority transfer after timelock expires
+    /// Requires 24-hour delay from proposal
+    pub fn execute_authority_transfer(ctx: Context<ExecuteAuthorityTransfer>) -> Result<()> {
+        let transfer = &ctx.accounts.pending_transfer;
         let config = &mut ctx.accounts.config;
+
+        require!(!transfer.executed, KernelError::AuthorityTransferAlreadyExecuted);
+        require!(!transfer.cancelled, KernelError::AuthorityTransferCancelled);
+
+        let current_time = Clock::get()?.unix_timestamp;
+        let time_elapsed = current_time - transfer.proposed_at;
+
+        require!(
+            time_elapsed >= TIMELOCK_DURATION,
+            KernelError::TimelockNotExpired
+        );
+
         let old_authority = config.authority;
-        config.authority = new_authority;
-        msg!("Authority transferred from {} to {}", old_authority, new_authority);
+        config.authority = transfer.new_authority;
+
+        // Mark as executed
+        let transfer = &mut ctx.accounts.pending_transfer;
+        transfer.executed = true;
+
+        msg!("Authority transferred after timelock!");
+        msg!("Old authority: {}", old_authority);
+        msg!("New authority: {}", config.authority);
+
+        Ok(())
+    }
+
+    /// Cancel a pending authority transfer (current authority only)
+    pub fn cancel_authority_transfer(ctx: Context<CancelAuthorityTransfer>) -> Result<()> {
+        let transfer = &mut ctx.accounts.pending_transfer;
+
+        require!(!transfer.executed, KernelError::AuthorityTransferAlreadyExecuted);
+
+        transfer.cancelled = true;
+
+        msg!("Authority transfer cancelled");
+
         Ok(())
     }
 
@@ -1196,8 +1252,36 @@ pub struct SetPaused<'info> {
     pub config: Account<'info, KernelConfig>,
 }
 
+/// Propose authority transfer (starts 24-hour timelock)
 #[derive(Accounts)]
-pub struct TransferAuthority<'info> {
+pub struct ProposeAuthorityTransfer<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub token_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        seeds = [b"config", token_mint.key().as_ref()],
+        bump = config.bump,
+        constraint = config.authority == authority.key() @ KernelError::NotAuthority
+    )]
+    pub config: Account<'info, KernelConfig>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + PendingAuthorityTransfer::INIT_SPACE,
+        seeds = [b"pending_authority_transfer", config.key().as_ref()],
+        bump
+    )]
+    pub pending_transfer: Account<'info, PendingAuthorityTransfer>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// Execute authority transfer after timelock expires
+#[derive(Accounts)]
+pub struct ExecuteAuthorityTransfer<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
@@ -1210,6 +1294,37 @@ pub struct TransferAuthority<'info> {
         constraint = config.authority == authority.key() @ KernelError::NotAuthority
     )]
     pub config: Account<'info, KernelConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"pending_authority_transfer", config.key().as_ref()],
+        bump = pending_transfer.bump,
+        constraint = pending_transfer.proposer == authority.key() @ KernelError::NotAuthority
+    )]
+    pub pending_transfer: Account<'info, PendingAuthorityTransfer>,
+}
+
+/// Cancel a pending authority transfer
+#[derive(Accounts)]
+pub struct CancelAuthorityTransfer<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub token_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        seeds = [b"config", token_mint.key().as_ref()],
+        bump = config.bump,
+        constraint = config.authority == authority.key() @ KernelError::NotAuthority
+    )]
+    pub config: Account<'info, KernelConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"pending_authority_transfer", config.key().as_ref()],
+        bump = pending_transfer.bump
+    )]
+    pub pending_transfer: Account<'info, PendingAuthorityTransfer>,
 }
 
 // === STATE ===
@@ -1276,6 +1391,18 @@ pub struct FeeProposal {
     pub bump: u8,
 }
 
+/// Pending authority transfer for timelock mechanism
+#[account]
+#[derive(InitSpace)]
+pub struct PendingAuthorityTransfer {
+    pub proposer: Pubkey,
+    pub new_authority: Pubkey,
+    pub proposed_at: i64,
+    pub executed: bool,
+    pub cancelled: bool,
+    pub bump: u8,
+}
+
 /// LP Vault for tracking fee allocations to liquidity
 #[account]
 #[derive(InitSpace)]
@@ -1330,4 +1457,10 @@ pub enum KernelError {
     ProposalCancelled,
     #[msg("Insufficient funds in LP vault")]
     InsufficientLPFunds,
+    #[msg("Authority transfer already pending")]
+    AuthorityTransferAlreadyPending,
+    #[msg("Authority transfer already executed")]
+    AuthorityTransferAlreadyExecuted,
+    #[msg("Authority transfer was cancelled")]
+    AuthorityTransferCancelled,
 }

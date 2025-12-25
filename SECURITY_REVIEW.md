@@ -110,25 +110,24 @@ None identified.
 
 ### MEDIUM PRIORITY
 
-#### M-1: `transfer_authority` Lacks Timelock Protection
+#### M-1: `transfer_authority` Lacks Timelock Protection ✅ FIXED
 
-**Location:** Lines 460-466
+**Location:** Lines 459-522 (now `propose_authority_transfer`, `execute_authority_transfer`, `cancel_authority_transfer`)
 
 **Issue:** Authority can be transferred instantly without a timelock, unlike fee updates which require 24-hour delay.
 
 **Risk:** If authority key is compromised, attacker has immediate control.
 
-**Recommendation:** Implement similar timelock pattern as fee updates, or require guardian co-signature.
+**Resolution (2025-12-26):** Implemented 24-hour timelock for authority transfers, matching the fee update pattern:
+- `propose_authority_transfer(new_authority)` - Initiates transfer with 24-hour delay
+- `execute_authority_transfer()` - Executes after timelock expires
+- `cancel_authority_transfer()` - Cancels pending transfer
 
 ```rust
-// Current (instant):
-pub fn transfer_authority(ctx: Context<TransferAuthority>, new_authority: Pubkey) -> Result<()> {
-    let config = &mut ctx.accounts.config;
-    config.authority = new_authority;
-    Ok(())
-}
-
-// Recommended: Add timelock or guardian requirement
+// NEW: Timelock-protected authority transfer
+pub fn propose_authority_transfer(ctx: Context<ProposeAuthorityTransfer>, new_authority: Pubkey) -> Result<()>
+pub fn execute_authority_transfer(ctx: Context<ExecuteAuthorityTransfer>) -> Result<()>
+pub fn cancel_authority_transfer(ctx: Context<CancelAuthorityTransfer>) -> Result<()>
 ```
 
 #### M-2: Emergency `update_fees` Test Mismatch
@@ -219,13 +218,13 @@ pub fn transfer_authority(ctx: Context<TransferAuthority>, new_authority: Pubkey
 
 ## Recommendations Summary
 
-| Priority | Issue | Recommendation |
-|----------|-------|----------------|
-| MEDIUM | M-1 | Add timelock to `transfer_authority` |
-| MEDIUM | M-2 | Fix test to include guardian signature |
-| LOW | L-1 | Document intentional pause behavior |
-| LOW | L-2 | Fix unused variable warning |
-| LOW | L-3 | Enhance airdrop documentation |
+| Priority | Issue | Recommendation | Status |
+|----------|-------|----------------|--------|
+| MEDIUM | M-1 | Add timelock to `transfer_authority` | ✅ FIXED |
+| MEDIUM | M-2 | Fix test to include guardian signature | Pending |
+| LOW | L-1 | Document intentional pause behavior | Pending |
+| LOW | L-2 | Fix unused variable warning | Pending |
+| LOW | L-3 | Enhance airdrop documentation | Pending |
 
 ---
 
@@ -233,7 +232,7 @@ pub fn transfer_authority(ctx: Context<TransferAuthority>, new_authority: Pubkey
 
 The kernel-token program implements a solid staking and reflection mechanism with appropriate security controls for a Solana token. The main areas for improvement are:
 
-1. Adding timelock protection to authority transfers (M-1)
+1. ~~Adding timelock protection to authority transfers (M-1)~~ ✅ Fixed 2025-12-26
 2. Updating test suite for guardian signature requirement (M-2)
 3. Adding tests for LP vault and timelock functionality
 

@@ -724,38 +724,67 @@ describe("kernel-token", () => {
         .rpc();
     });
 
-    it("transfers authority", async () => {
+    it("proposes authority transfer with timelock", async () => {
       const newAuthority = Keypair.generate();
 
-      // Airdrop SOL to new authority
-      await connection.requestAirdrop(newAuthority.publicKey, LAMPORTS_PER_SOL);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      // Derive PDA for pending transfer
+      const [pendingTransferPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("pending_authority_transfer"), configPda.toBuffer()],
+        program.programId
+      );
 
+      // Propose authority transfer (starts 24-hour timelock)
       await program.methods
-        .transferAuthority(newAuthority.publicKey)
+        .proposeAuthorityTransfer(newAuthority.publicKey)
         .accounts({
           authority: authority.publicKey,
           tokenMint,
           config: configPda,
+          pendingTransfer: pendingTransferPda,
+          systemProgram: SystemProgram.programId,
         })
         .signers([authority])
         .rpc();
 
-      let config = await program.account.kernelConfig.fetch(configPda);
-      assert.equal(config.authority.toBase58(), newAuthority.publicKey.toBase58());
+      // Verify proposal was created
+      const transfer = await program.account.pendingAuthorityTransfer.fetch(pendingTransferPda);
+      assert.equal(transfer.proposer.toBase58(), authority.publicKey.toBase58());
+      assert.equal(transfer.newAuthority.toBase58(), newAuthority.publicKey.toBase58());
+      assert.equal(transfer.executed, false);
+      assert.equal(transfer.cancelled, false);
 
-      // Transfer back
+      // Trying to execute before timelock should fail
+      try {
+        await program.methods
+          .executeAuthorityTransfer()
+          .accounts({
+            authority: authority.publicKey,
+            tokenMint,
+            config: configPda,
+            pendingTransfer: pendingTransferPda,
+          })
+          .signers([authority])
+          .rpc();
+
+        assert.fail("Should have thrown TimelockNotExpired error");
+      } catch (err: any) {
+        expect(err.message).to.include("TimelockNotExpired");
+      }
+
+      // Cancel the transfer instead of waiting 24 hours
       await program.methods
-        .transferAuthority(authority.publicKey)
+        .cancelAuthorityTransfer()
         .accounts({
-          authority: newAuthority.publicKey,
+          authority: authority.publicKey,
           tokenMint,
           config: configPda,
+          pendingTransfer: pendingTransferPda,
         })
-        .signers([newAuthority])
+        .signers([authority])
         .rpc();
 
-      config = await program.account.kernelConfig.fetch(configPda);
+      // Verify authority unchanged
+      const config = await program.account.kernelConfig.fetch(configPda);
       assert.equal(config.authority.toBase58(), authority.publicKey.toBase58());
     });
 
