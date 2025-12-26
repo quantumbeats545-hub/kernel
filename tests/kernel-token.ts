@@ -753,6 +753,38 @@ describe("kernel-token", () => {
       }
     });
 
+    it("prevents non-authority from proposing authority transfer", async () => {
+      // This test must run BEFORE any proposal is created (no PDA exists yet)
+      const newAuthority = Keypair.generate();
+
+      const [pendingTransferPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("pending_authority_transfer"), configPda.toBuffer()],
+        program.programId
+      );
+
+      try {
+        await program.methods
+          .proposeAuthorityTransfer(newAuthority.publicKey)
+          .accounts({
+            authority: user1.publicKey,
+            tokenMint,
+            config: configPda,
+            pendingTransfer: pendingTransferPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user1])
+          .rpc();
+
+        assert.fail("Should have thrown authority error");
+      } catch (err: any) {
+        const isAuthError = err.message.includes("NotAuthority") ||
+                           err.message.includes("ConstraintHasOne") ||
+                           err.message.includes("has_one") ||
+                           err.message.includes("A has one constraint");
+        expect(isAuthError).to.be.true;
+      }
+    });
+
     it("proposes authority transfer with timelock", async () => {
       const newAuthority = Keypair.generate();
 
@@ -864,6 +896,65 @@ describe("kernel-token", () => {
         assert.fail("Should have thrown error");
       } catch (err: any) {
         expect(err.message).to.include("NotAuthority");
+      }
+    });
+
+    it("prevents non-authority from cancelling authority transfer", async () => {
+      // PDA already exists from "proposes authority transfer with timelock" test
+      // which was cancelled, so we use the existing PDA
+      const [pendingTransferPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("pending_authority_transfer"), configPda.toBuffer()],
+        program.programId
+      );
+
+      // Non-authority tries to cancel the already-cancelled transfer
+      // This should still fail with authority error
+      try {
+        await program.methods
+          .cancelAuthorityTransfer()
+          .accounts({
+            authority: user1.publicKey,
+            tokenMint,
+            config: configPda,
+            pendingTransfer: pendingTransferPda,
+          })
+          .signers([user1])
+          .rpc();
+
+        assert.fail("Should have thrown authority error");
+      } catch (err: any) {
+        const isAuthError = err.message.includes("NotAuthority") ||
+                           err.message.includes("ConstraintHasOne") ||
+                           err.message.includes("has_one") ||
+                           err.message.includes("A has one constraint");
+        expect(isAuthError).to.be.true;
+      }
+    });
+
+    it("prevents executing a cancelled authority transfer", async () => {
+      // PDA already exists from "proposes authority transfer with timelock" test
+      // which was cancelled
+      const [pendingTransferPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("pending_authority_transfer"), configPda.toBuffer()],
+        program.programId
+      );
+
+      // Try to execute the already-cancelled transfer
+      try {
+        await program.methods
+          .executeAuthorityTransfer()
+          .accounts({
+            authority: authority.publicKey,
+            tokenMint,
+            config: configPda,
+            pendingTransfer: pendingTransferPda,
+          })
+          .signers([authority])
+          .rpc();
+
+        assert.fail("Should have thrown AuthorityTransferCancelled error");
+      } catch (err: any) {
+        expect(err.message).to.include("AuthorityTransferCancelled");
       }
     });
   });
