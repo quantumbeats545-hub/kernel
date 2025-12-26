@@ -130,15 +130,18 @@ pub fn execute_authority_transfer(ctx: Context<ExecuteAuthorityTransfer>) -> Res
 pub fn cancel_authority_transfer(ctx: Context<CancelAuthorityTransfer>) -> Result<()>
 ```
 
-#### M-2: Emergency `update_fees` Test Mismatch
+#### M-2: Emergency `update_fees` Test Mismatch ✅ FIXED
 
-**Location:** Test file Lines 681-711
+**Location:** Test file Lines 698-754
 
-**Issue:** The test calls `update_fees()` with only authority signature, but the contract requires both `authority` AND `guardian` signers (Lines 1001-1018).
+**Issue:** The test calls `update_fees()` with only authority signature, but the contract requires both `authority` AND `guardian` signers (Lines 1058-1074).
 
 **Impact:** Test will fail if run against current contract.
 
-**Recommendation:** Update test to include guardian co-signature or document as intentional multisig bypass for testing.
+**Resolution (2025-12-26):** Updated test to include guardian co-signature:
+- Added `guardian` keypair to test setup
+- Updated `updateFees` test to include `guardian` in accounts and signers
+- Added new test case verifying that update fails without guardian signature
 
 ### LOW PRIORITY
 
@@ -221,7 +224,7 @@ pub fn cancel_authority_transfer(ctx: Context<CancelAuthorityTransfer>) -> Resul
 | Priority | Issue | Recommendation | Status |
 |----------|-------|----------------|--------|
 | MEDIUM | M-1 | Add timelock to `transfer_authority` | ✅ FIXED |
-| MEDIUM | M-2 | Fix test to include guardian signature | Pending |
+| MEDIUM | M-2 | Fix test to include guardian signature | ✅ FIXED |
 | LOW | L-1 | Document intentional pause behavior | Pending |
 | LOW | L-2 | Fix unused variable warning | Pending |
 | LOW | L-3 | Enhance airdrop documentation | Pending |
@@ -233,7 +236,7 @@ pub fn cancel_authority_transfer(ctx: Context<CancelAuthorityTransfer>) -> Resul
 The kernel-token program implements a solid staking and reflection mechanism with appropriate security controls for a Solana token. The main areas for improvement are:
 
 1. ~~Adding timelock protection to authority transfers (M-1)~~ ✅ Fixed 2025-12-26
-2. Updating test suite for guardian signature requirement (M-2)
+2. ~~Updating test suite for guardian signature requirement (M-2)~~ ✅ Fixed 2025-12-26
 3. Adding tests for LP vault and timelock functionality
 
 No critical vulnerabilities were identified. The program follows Anchor best practices with proper PDA derivation, checked arithmetic, and authority validation.

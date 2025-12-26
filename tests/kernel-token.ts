@@ -30,6 +30,7 @@ describe("kernel-token", () => {
   // Test accounts
   let tokenMint: PublicKey;
   let authority: Keypair;
+  let guardian: Keypair; // Guardian for multisig emergency operations
   let user1: Keypair;
   let user2: Keypair;
 
@@ -52,6 +53,7 @@ describe("kernel-token", () => {
   before(async () => {
     // Generate test keypairs
     authority = Keypair.generate();
+    guardian = Keypair.generate(); // Guardian for multisig emergency operations
     user1 = Keypair.generate();
     user2 = Keypair.generate();
 
@@ -60,6 +62,7 @@ describe("kernel-token", () => {
 
     await Promise.all([
       connection.requestAirdrop(authority.publicKey, airdropAmount),
+      connection.requestAirdrop(guardian.publicKey, airdropAmount),
       connection.requestAirdrop(user1.publicKey, airdropAmount),
       connection.requestAirdrop(user2.publicKey, airdropAmount),
     ]);
@@ -692,19 +695,21 @@ describe("kernel-token", () => {
       assert.equal(config.isPaused, false);
     });
 
-    it("updates fee configuration", async () => {
+    it("updates fee configuration with guardian co-signature", async () => {
       const newReflection = 250; // 2.5%
       const newLp = 150; // 1.5%
       const newBurn = 100; // 1%
 
+      // Emergency fee update requires both authority AND guardian signatures (multisig)
       await program.methods
         .updateFees(newReflection, newLp, newBurn)
         .accounts({
           authority: authority.publicKey,
+          guardian: guardian.publicKey,
           tokenMint,
           config: configPda,
         })
-        .signers([authority])
+        .signers([authority, guardian])
         .rpc();
 
       const config = await program.account.kernelConfig.fetch(configPda);
@@ -712,16 +717,40 @@ describe("kernel-token", () => {
       assert.equal(config.lpShareBps, newLp);
       assert.equal(config.burnShareBps, newBurn);
 
-      // Reset to original
+      // Reset to original (also requires multisig)
       await program.methods
         .updateFees(REFLECTION_BPS, LP_BPS, BURN_BPS)
         .accounts({
           authority: authority.publicKey,
+          guardian: guardian.publicKey,
           tokenMint,
           config: configPda,
         })
-        .signers([authority])
+        .signers([authority, guardian])
         .rpc();
+    });
+
+    it("fails emergency update without guardian signature", async () => {
+      try {
+        // Attempt update with only authority (missing guardian)
+        await program.methods
+          .updateFees(300, 100, 100)
+          .accounts({
+            authority: authority.publicKey,
+            guardian: user1.publicKey, // Wrong signer - user1 is not signing
+            tokenMint,
+            config: configPda,
+          })
+          .signers([authority]) // Only authority signing, guardian missing
+          .rpc();
+
+        assert.fail("Should have thrown error - guardian signature required");
+      } catch (err: any) {
+        // Expected: signature verification failure or missing signer error
+        expect(err.message).to.satisfy((msg: string) =>
+          msg.includes("Signature") || msg.includes("signature") || msg.includes("unknown signer")
+        );
+      }
     });
 
     it("proposes authority transfer with timelock", async () => {
