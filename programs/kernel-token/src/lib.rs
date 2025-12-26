@@ -116,6 +116,10 @@ pub mod kernel_token {
 
     /// Unstake $KERNEL and collect any pending rewards
     /// Transfers tokens from staking vault back to user
+    ///
+    /// NOTE: This function intentionally does NOT check is_paused.
+    /// Users must always be able to withdraw their staked tokens,
+    /// even during emergency pauses. This is a safety feature.
     pub fn unstake(ctx: Context<Unstake>, amount: u64) -> Result<()> {
         let user_stake = &mut ctx.accounts.user_stake;
         let config = &mut ctx.accounts.config;
@@ -179,6 +183,10 @@ pub mod kernel_token {
 
     /// Claim reflection rewards
     /// Transfers pending rewards from reflection pool to user
+    ///
+    /// NOTE: This function intentionally does NOT check is_paused.
+    /// Users must always be able to claim their earned rewards,
+    /// even during emergency pauses. This is a safety feature.
     pub fn claim_reflections(ctx: Context<ClaimReflections>) -> Result<()> {
         let user_stake = &mut ctx.accounts.user_stake;
         let config = &mut ctx.accounts.config;
@@ -290,7 +298,8 @@ pub mod kernel_token {
         require!(amount > 0, KernelError::ZeroAmount);
 
         // Burn tokens from authority's account
-        let decimals = ctx.accounts.token_mint.decimals;
+        // Note: burn() doesn't require decimals unlike transfer_checked()
+        let _decimals = ctx.accounts.token_mint.decimals;
 
         token_interface::burn(
             CpiContext::new(
@@ -317,7 +326,25 @@ pub mod kernel_token {
         Ok(())
     }
 
-    /// Airdrop tokens to recipients
+    /// Register an airdrop campaign for tracking purposes
+    ///
+    /// IMPORTANT: This function does NOT transfer tokens. It only records
+    /// airdrop accounting (total amount, recipient count) for campaign tracking.
+    ///
+    /// Token transfers must be done separately via standard SPL transfers.
+    /// This design allows:
+    /// - Batch processing of large airdrops across multiple transactions
+    /// - Off-chain verification before actual token distribution
+    /// - Campaign tracking and analytics
+    ///
+    /// # Arguments
+    /// * `recipients` - List of wallet addresses (max 50 per call)
+    /// * `amount_per_recipient` - Token amount each recipient will receive
+    ///
+    /// # Example Flow
+    /// 1. Call `airdrop()` to register campaign and update accounting
+    /// 2. Execute SPL token transfers to each recipient off-chain
+    /// 3. Recipients can verify their allocation via airdrop_state
     pub fn airdrop(
         ctx: Context<Airdrop>,
         recipients: Vec<Pubkey>,
@@ -340,9 +367,6 @@ pub mod kernel_token {
             .checked_add(recipients.len() as u64)
             .unwrap();
         airdrop_state.bump = ctx.bumps.airdrop_state;
-
-        // Note: Actual token transfers for airdrop are done via separate transactions
-        // This just tracks the accounting for the airdrop campaign
 
         msg!(
             "Airdrop registered: {} $KERNEL to {} recipients!",
@@ -539,6 +563,9 @@ pub mod kernel_token {
 
     /// Allocate tokens to LP vault from harvested fees
     /// This is the on-chain portion - actual LP addition happens off-chain
+    ///
+    /// NOTE: This function intentionally does NOT check is_paused.
+    /// LP operations should continue during pauses to maintain liquidity.
     pub fn allocate_to_lp(ctx: Context<AllocateToLP>, amount: u64) -> Result<()> {
         require!(amount > 0, KernelError::ZeroAmount);
 
@@ -610,6 +637,9 @@ pub mod kernel_token {
     }
 
     /// Withdraw tokens from LP vault (emergency only)
+    ///
+    /// NOTE: This function intentionally does NOT check is_paused.
+    /// Emergency withdrawals must always be possible for fund recovery.
     pub fn withdraw_from_lp_vault(ctx: Context<WithdrawFromLPVault>, amount: u64) -> Result<()> {
         require!(amount > 0, KernelError::ZeroAmount);
 

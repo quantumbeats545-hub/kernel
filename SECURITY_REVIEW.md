@@ -145,35 +145,42 @@ pub fn cancel_authority_transfer(ctx: Context<CancelAuthorityTransfer>) -> Resul
 
 ### LOW PRIORITY
 
-#### L-1: Inconsistent Pause Checks
+#### L-1: Inconsistent Pause Checks ✅ FIXED
 
 **Location:** Various functions
 
 **Issue:** Only `stake()` checks `is_paused` (Line 65). Other functions like `unstake()`, `claim_reflections()`, and LP operations do not.
 
-**Assessment:** This may be **intentional** to allow users to exit and claim rewards even when protocol is paused. However, it should be documented.
+**Assessment:** This is **intentional** to allow users to exit and claim rewards even when protocol is paused.
 
-**Functions without pause check:**
-- `unstake()` - Lines 119-178
-- `claim_reflections()` - Lines 182-241
-- `allocate_to_lp()` - Lines 486-515
-- `withdraw_from_lp_vault()` - Lines 557-597
+**Resolution (2025-12-26):** Added documentation to each function explaining the intentional design:
+- `unstake()` - Users must always be able to withdraw staked tokens
+- `claim_reflections()` - Users must always be able to claim earned rewards
+- `allocate_to_lp()` - LP operations should continue to maintain liquidity
+- `withdraw_from_lp_vault()` - Emergency withdrawals must always be possible
 
-#### L-2: Unused Variable Warning
+#### L-2: Unused Variable Warning ✅ FIXED
 
-**Location:** Line 293
+**Location:** Line 302
 
 **Issue:** `decimals` variable declared but unused in `burn_tokens()`.
 
-**Fix:** Prefix with underscore: `let _decimals = ctx.accounts.token_mint.decimals;`
+**Resolution (2025-12-26):** Prefixed with underscore and added explanatory comment:
+```rust
+// Note: burn() doesn't require decimals unlike transfer_checked()
+let _decimals = ctx.accounts.token_mint.decimals;
+```
 
-#### L-3: Airdrop Function Doesn't Transfer Tokens
+#### L-3: Airdrop Function Doesn't Transfer Tokens ✅ FIXED
 
-**Location:** Lines 321-354
+**Location:** Lines 329-378
 
-**Assessment:** The `airdrop()` function only updates accounting state, not actual token transfers. Comments indicate this is intentional ("Actual token transfers for airdrop are done via separate transactions").
+**Issue:** The `airdrop()` function only updates accounting state, not actual token transfers.
 
-**Recommendation:** Document this clearly in function-level documentation to avoid confusion.
+**Resolution (2025-12-26):** Added comprehensive function-level documentation explaining:
+- This is intentional for batch processing and off-chain verification
+- Token transfers done separately via standard SPL transfers
+- Documents the complete airdrop flow with example
 
 ---
 
@@ -225,9 +232,9 @@ pub fn cancel_authority_transfer(ctx: Context<CancelAuthorityTransfer>) -> Resul
 |----------|-------|----------------|--------|
 | MEDIUM | M-1 | Add timelock to `transfer_authority` | ✅ FIXED |
 | MEDIUM | M-2 | Fix test to include guardian signature | ✅ FIXED |
-| LOW | L-1 | Document intentional pause behavior | Pending |
-| LOW | L-2 | Fix unused variable warning | Pending |
-| LOW | L-3 | Enhance airdrop documentation | Pending |
+| LOW | L-1 | Document intentional pause behavior | ✅ FIXED |
+| LOW | L-2 | Fix unused variable warning | ✅ FIXED |
+| LOW | L-3 | Enhance airdrop documentation | ✅ FIXED |
 
 ---
 
