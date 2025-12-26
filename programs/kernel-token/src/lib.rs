@@ -1,9 +1,6 @@
 use anchor_lang::prelude::*;
-use anchor_spl::{
-    associated_token::AssociatedToken,
-    token_interface::{
-        self, Burn, Mint, TokenAccount, TokenInterface, TransferChecked,
-    },
+use anchor_spl::token_interface::{
+    self, Burn, Mint, TokenAccount, TokenInterface, TransferChecked,
 };
 
 declare_id!("5QVVrCBUgqjG3pWcSmRkqaagFaokaAwgoFFDLXBJgFJw");

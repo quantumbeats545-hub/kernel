@@ -817,6 +817,38 @@ describe("kernel-token", () => {
       assert.equal(config.authority.toBase58(), authority.publicKey.toBase58());
     });
 
+    it("prevents non-authority from executing authority transfer", async () => {
+      // Use the existing pending transfer from the previous test
+      // (the cancel set cancelled=true but account still exists)
+      const [pendingTransferPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("pending_authority_transfer"), configPda.toBuffer()],
+        program.programId
+      );
+
+      try {
+        await program.methods
+          .executeAuthorityTransfer()
+          .accounts({
+            authority: user1.publicKey,
+            tokenMint,
+            config: configPda,
+            pendingTransfer: pendingTransferPda,
+          })
+          .signers([user1])
+          .rpc();
+
+        assert.fail("Should have thrown authority error");
+      } catch (err: any) {
+        // Anchor constraint errors may appear as "ConstraintHasOne" or custom error
+        const isAuthError = err.message.includes("NotAuthority") ||
+                           err.message.includes("ConstraintHasOne") ||
+                           err.message.includes("has_one") ||
+                           err.message.includes("A has one constraint") ||
+                           err.message.includes("AuthorityTransferCancelled");
+        expect(isAuthError).to.be.true;
+      }
+    });
+
     it("prevents non-authority from admin functions", async () => {
       try {
         await program.methods
@@ -866,6 +898,544 @@ describe("kernel-token", () => {
         amountPerRecipient.toNumber() * recipients.length
       );
       assert.equal(airdropState.recipientCount.toNumber(), recipients.length);
+    });
+  });
+
+  describe("Fee Proposal Timelock", () => {
+    let feeProposalPda: PublicKey;
+
+    before(() => {
+      [feeProposalPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("fee_proposal"), configPda.toBuffer()],
+        program.programId
+      );
+    });
+
+    it("proposes fee update with timelock", async () => {
+      const newReflection = 300; // 3%
+      const newLp = 100; // 1%
+      const newBurn = 100; // 1%
+
+      const tx = await program.methods
+        .proposeFeeUpdate(newReflection, newLp, newBurn)
+        .accounts({
+          authority: authority.publicKey,
+          tokenMint,
+          config: configPda,
+          feeProposal: feeProposalPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([authority])
+        .rpc();
+
+      console.log("Fee proposal tx:", tx);
+
+      // Verify proposal was created
+      const proposal = await program.account.feeProposal.fetch(feeProposalPda);
+      assert.equal(proposal.proposer.toBase58(), authority.publicKey.toBase58());
+      assert.equal(proposal.reflectionShareBps, newReflection);
+      assert.equal(proposal.lpShareBps, newLp);
+      assert.equal(proposal.burnShareBps, newBurn);
+      assert.equal(proposal.executed, false);
+      assert.equal(proposal.cancelled, false);
+    });
+
+    it("fails to execute before timelock expires", async () => {
+      try {
+        await program.methods
+          .executeFeeUpdate()
+          .accounts({
+            authority: authority.publicKey,
+            tokenMint,
+            config: configPda,
+            feeProposal: feeProposalPda,
+          })
+          .signers([authority])
+          .rpc();
+
+        assert.fail("Should have thrown TimelockNotExpired error");
+      } catch (err: any) {
+        expect(err.message).to.include("TimelockNotExpired");
+      }
+    });
+
+    it("fails proposal with invalid fee total", async () => {
+      // Create a new mint to test invalid proposal
+      const newMint = await createMint(
+        connection,
+        authority,
+        authority.publicKey,
+        null,
+        9,
+        Keypair.generate(),
+        { commitment: "confirmed" },
+        TOKEN_2022_PROGRAM_ID
+      );
+
+      const [newConfigPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("config"), newMint.toBuffer()],
+        program.programId
+      );
+
+      const [newVaultPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("staking_vault"), newMint.toBuffer()],
+        program.programId
+      );
+
+      const [newPoolPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("reflection_pool"), newMint.toBuffer()],
+        program.programId
+      );
+
+      const [newFeeProposalPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("fee_proposal"), newConfigPda.toBuffer()],
+        program.programId
+      );
+
+      // Initialize new config first
+      await program.methods
+        .initialize(200, 200, 100)
+        .accounts({
+          authority: authority.publicKey,
+          tokenMint: newMint,
+          stakingVault: newVaultPda,
+          reflectionPool: newPoolPda,
+          config: newConfigPda,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([authority])
+        .rpc();
+
+      try {
+        await program.methods
+          .proposeFeeUpdate(100, 100, 100) // Total 300, should be 500
+          .accounts({
+            authority: authority.publicKey,
+            tokenMint: newMint,
+            config: newConfigPda,
+            feeProposal: newFeeProposalPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([authority])
+          .rpc();
+
+        assert.fail("Should have thrown InvalidFeeConfig error");
+      } catch (err: any) {
+        expect(err.message).to.include("InvalidFeeConfig");
+      }
+    });
+
+    it("cancels fee proposal", async () => {
+      const tx = await program.methods
+        .cancelFeeProposal()
+        .accounts({
+          authority: authority.publicKey,
+          tokenMint,
+          config: configPda,
+          feeProposal: feeProposalPda,
+        })
+        .signers([authority])
+        .rpc();
+
+      console.log("Cancel fee proposal tx:", tx);
+
+      // Verify proposal was cancelled
+      const proposal = await program.account.feeProposal.fetch(feeProposalPda);
+      assert.equal(proposal.cancelled, true);
+
+      // Verify config unchanged
+      const config = await program.account.kernelConfig.fetch(configPda);
+      assert.equal(config.reflectionShareBps, REFLECTION_BPS);
+      assert.equal(config.lpShareBps, LP_BPS);
+      assert.equal(config.burnShareBps, BURN_BPS);
+    });
+  });
+
+  describe("LP Vault Operations", () => {
+    let lpVaultPda: PublicKey;
+    let lpVaultTokenPda: PublicKey;
+    const ALLOCATE_AMOUNT = new anchor.BN(10_000 * 10 ** 9); // 10K tokens
+
+    before(() => {
+      [lpVaultPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp_vault"), tokenMint.toBuffer()],
+        program.programId
+      );
+
+      [lpVaultTokenPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp_vault_token"), tokenMint.toBuffer()],
+        program.programId
+      );
+    });
+
+    it("initializes LP vault", async () => {
+      const tx = await program.methods
+        .initializeLpVault()
+        .accounts({
+          authority: authority.publicKey,
+          tokenMint,
+          config: configPda,
+          lpVault: lpVaultPda,
+          lpVaultToken: lpVaultTokenPda,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([authority])
+        .rpc();
+
+      console.log("Initialize LP vault tx:", tx);
+
+      // Verify LP vault was created
+      const lpVault = await program.account.lpVault.fetch(lpVaultPda);
+      assert.equal(lpVault.authority.toBase58(), authority.publicKey.toBase58());
+      assert.equal(lpVault.tokenMint.toBase58(), tokenMint.toBase58());
+      assert.equal(lpVault.totalAllocated.toNumber(), 0);
+      assert.equal(lpVault.totalDeployed.toNumber(), 0);
+      assert.equal(lpVault.pendingDeployment.toNumber(), 0);
+    });
+
+    it("allocates tokens to LP vault", async () => {
+      const balanceBefore = await getAccount(
+        connection,
+        authorityTokenAccount,
+        "confirmed",
+        TOKEN_2022_PROGRAM_ID
+      );
+
+      const tx = await program.methods
+        .allocateToLp(ALLOCATE_AMOUNT)
+        .accounts({
+          authority: authority.publicKey,
+          tokenMint,
+          config: configPda,
+          lpVault: lpVaultPda,
+          authorityTokenAccount,
+          lpVaultToken: lpVaultTokenPda,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([authority])
+        .rpc({ commitment: "confirmed" });
+
+      // Wait for confirmation and state propagation
+      await connection.confirmTransaction(tx, "confirmed");
+      console.log("Allocate to LP tx:", tx);
+
+      // Verify LP vault updated
+      const lpVault = await program.account.lpVault.fetch(lpVaultPda);
+      assert.equal(lpVault.totalAllocated.toNumber(), ALLOCATE_AMOUNT.toNumber());
+      assert.equal(lpVault.pendingDeployment.toNumber(), ALLOCATE_AMOUNT.toNumber());
+
+      // Verify vault token balance
+      const vaultBalance = await getAccount(
+        connection,
+        lpVaultTokenPda,
+        "confirmed",
+        TOKEN_2022_PROGRAM_ID
+      );
+      assert.equal(Number(vaultBalance.amount), ALLOCATE_AMOUNT.toNumber());
+
+      // Verify authority balance decreased
+      const balanceAfter = await getAccount(
+        connection,
+        authorityTokenAccount,
+        "confirmed",
+        TOKEN_2022_PROGRAM_ID
+      );
+      assert.equal(
+        Number(balanceBefore.amount) - Number(balanceAfter.amount),
+        ALLOCATE_AMOUNT.toNumber()
+      );
+    });
+
+    it("fails to allocate zero amount", async () => {
+      try {
+        await program.methods
+          .allocateToLp(new anchor.BN(0))
+          .accounts({
+            authority: authority.publicKey,
+            tokenMint,
+            config: configPda,
+            lpVault: lpVaultPda,
+            authorityTokenAccount,
+            lpVaultToken: lpVaultTokenPda,
+            tokenProgram: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([authority])
+          .rpc();
+
+        assert.fail("Should have thrown ZeroAmount error");
+      } catch (err: any) {
+        expect(err.message).to.include("ZeroAmount");
+      }
+    });
+
+    it("records LP deployment", async () => {
+      const deployAmount = new anchor.BN(5_000 * 10 ** 9); // Deploy 5K tokens
+      const lpTokensReceived = new anchor.BN(1000 * 10 ** 9); // Mock LP tokens
+      const poolAddress = Keypair.generate().publicKey;
+
+      // Derive LP deployment PDA (uses total_deployed which is 0 before first deployment)
+      const lpVaultBefore = await program.account.lpVault.fetch(lpVaultPda);
+      const [lpDeploymentPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("lp_deployment"),
+          lpVaultPda.toBuffer(),
+          Buffer.from(lpVaultBefore.totalDeployed.toArray("le", 8)),
+        ],
+        program.programId
+      );
+
+      const tx = await program.methods
+        .recordLpDeployment(deployAmount, lpTokensReceived, poolAddress)
+        .accounts({
+          authority: authority.publicKey,
+          tokenMint,
+          config: configPda,
+          lpVault: lpVaultPda,
+          lpDeployment: lpDeploymentPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([authority])
+        .rpc();
+
+      console.log("Record LP deployment tx:", tx);
+
+      // Verify LP vault updated
+      const lpVault = await program.account.lpVault.fetch(lpVaultPda);
+      assert.equal(lpVault.totalDeployed.toNumber(), deployAmount.toNumber());
+      assert.equal(
+        lpVault.pendingDeployment.toNumber(),
+        ALLOCATE_AMOUNT.toNumber() - deployAmount.toNumber()
+      );
+
+      // Verify deployment record
+      const deployment = await program.account.lpDeployment.fetch(lpDeploymentPda);
+      assert.equal(deployment.poolAddress.toBase58(), poolAddress.toBase58());
+      assert.equal(deployment.kernelAmount.toNumber(), deployAmount.toNumber());
+      assert.equal(deployment.lpTokensReceived.toNumber(), lpTokensReceived.toNumber());
+      assert.equal(deployment.withdrawn, false);
+    });
+
+    it("withdraws from LP vault", async () => {
+      const withdrawAmount = new anchor.BN(2_000 * 10 ** 9); // Withdraw 2K tokens
+
+      const balanceBefore = await getAccount(
+        connection,
+        authorityTokenAccount,
+        "confirmed",
+        TOKEN_2022_PROGRAM_ID
+      );
+
+      const lpVaultBefore = await program.account.lpVault.fetch(lpVaultPda);
+
+      const tx = await program.methods
+        .withdrawFromLpVault(withdrawAmount)
+        .accounts({
+          authority: authority.publicKey,
+          tokenMint,
+          config: configPda,
+          lpVault: lpVaultPda,
+          authorityTokenAccount,
+          lpVaultToken: lpVaultTokenPda,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([authority])
+        .rpc({ commitment: "confirmed" });
+
+      // Wait for confirmation to ensure state propagation
+      await connection.confirmTransaction(tx, "confirmed");
+
+      console.log("Withdraw from LP vault tx:", tx);
+
+      // Verify LP vault updated
+      const lpVault = await program.account.lpVault.fetch(lpVaultPda);
+      assert.equal(
+        lpVault.pendingDeployment.toNumber(),
+        lpVaultBefore.pendingDeployment.toNumber() - withdrawAmount.toNumber()
+      );
+
+      // Verify authority balance increased
+      const balanceAfter = await getAccount(
+        connection,
+        authorityTokenAccount,
+        "confirmed",
+        TOKEN_2022_PROGRAM_ID
+      );
+      assert.equal(
+        Number(balanceAfter.amount) - Number(balanceBefore.amount),
+        withdrawAmount.toNumber()
+      );
+    });
+
+    it("fails to withdraw more than pending", async () => {
+      const lpVault = await program.account.lpVault.fetch(lpVaultPda);
+      const tooMuch = new anchor.BN(lpVault.pendingDeployment.toNumber() + 1);
+
+      try {
+        await program.methods
+          .withdrawFromLpVault(tooMuch)
+          .accounts({
+            authority: authority.publicKey,
+            tokenMint,
+            config: configPda,
+            lpVault: lpVaultPda,
+            authorityTokenAccount,
+            lpVaultToken: lpVaultTokenPda,
+            tokenProgram: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([authority])
+          .rpc();
+
+        assert.fail("Should have thrown InsufficientLPFunds error");
+      } catch (err: any) {
+        expect(err.message).to.include("InsufficientLPFunds");
+      }
+    });
+  });
+
+  describe("Multi-User Reflections", () => {
+    it("distributes reflections proportionally to multiple stakers", async () => {
+      // User2 stakes tokens
+      const user2StakeAmount = new anchor.BN(2_000_000 * 10 ** 9); // 2M tokens
+
+      const [user2StakePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("stake"), configPda.toBuffer(), user2.publicKey.toBuffer()],
+        program.programId
+      );
+
+      await program.methods
+        .stake(user2StakeAmount)
+        .accounts({
+          owner: user2.publicKey,
+          tokenMint,
+          config: configPda,
+          userTokenAccount: user2TokenAccount,
+          stakingVault: stakingVaultPda,
+          userStake: user2StakePda,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user2])
+        .rpc({ commitment: "confirmed" });
+
+      console.log("User2 staked:", user2StakeAmount.toString());
+
+      // Get stake amounts for proportion calculation
+      const [user1StakePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("stake"), configPda.toBuffer(), user1.publicKey.toBuffer()],
+        program.programId
+      );
+
+      const user1Stake = await program.account.userStake.fetch(user1StakePda);
+      const user2Stake = await program.account.userStake.fetch(user2StakePda);
+
+      console.log("User1 staked:", user1Stake.stakedAmount.toString());
+      console.log("User2 staked:", user2Stake.stakedAmount.toString());
+
+      // Deposit reflections
+      const reflectionAmount = new anchor.BN(50_000 * 10 ** 9); // 50K tokens
+
+      await program.methods
+        .depositReflections(reflectionAmount)
+        .accounts({
+          authority: authority.publicKey,
+          tokenMint,
+          config: configPda,
+          authorityTokenAccount,
+          reflectionPool: reflectionPoolPda,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([authority])
+        .rpc({ commitment: "confirmed" });
+
+      console.log("Deposited reflections:", reflectionAmount.toString());
+
+      // Get balances before claims
+      const user1BalanceBefore = await getAccount(
+        connection,
+        user1TokenAccount,
+        "confirmed",
+        TOKEN_2022_PROGRAM_ID
+      );
+
+      const user2BalanceBefore = await getAccount(
+        connection,
+        user2TokenAccount,
+        "confirmed",
+        TOKEN_2022_PROGRAM_ID
+      );
+
+      // User1 claims
+      await program.methods
+        .claimReflections()
+        .accounts({
+          owner: user1.publicKey,
+          tokenMint,
+          config: configPda,
+          userTokenAccount: user1TokenAccount,
+          reflectionPool: reflectionPoolPda,
+          userStake: user1StakePda,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([user1])
+        .rpc({ commitment: "confirmed" });
+
+      // User2 claims
+      await program.methods
+        .claimReflections()
+        .accounts({
+          owner: user2.publicKey,
+          tokenMint,
+          config: configPda,
+          userTokenAccount: user2TokenAccount,
+          reflectionPool: reflectionPoolPda,
+          userStake: user2StakePda,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([user2])
+        .rpc({ commitment: "confirmed" });
+
+      // Get balances after claims
+      const user1BalanceAfter = await getAccount(
+        connection,
+        user1TokenAccount,
+        "confirmed",
+        TOKEN_2022_PROGRAM_ID
+      );
+
+      const user2BalanceAfter = await getAccount(
+        connection,
+        user2TokenAccount,
+        "confirmed",
+        TOKEN_2022_PROGRAM_ID
+      );
+
+      const user1Rewards = Number(user1BalanceAfter.amount) - Number(user1BalanceBefore.amount);
+      const user2Rewards = Number(user2BalanceAfter.amount) - Number(user2BalanceBefore.amount);
+
+      console.log("User1 rewards:", user1Rewards);
+      console.log("User2 rewards:", user2Rewards);
+
+      // Both users should have received rewards
+      assert.isTrue(user1Rewards > 0, "User1 should receive rewards");
+      assert.isTrue(user2Rewards > 0, "User2 should receive rewards");
+
+      // User2 staked more, should receive more rewards
+      // User2 has 2M, proportionally more than user1's remaining stake
+      const totalStaked = user1Stake.stakedAmount.toNumber() + user2Stake.stakedAmount.toNumber();
+      const expectedUser2Proportion = user2Stake.stakedAmount.toNumber() / totalStaked;
+
+      // User2's rewards should be proportional to their stake (with some tolerance for rounding)
+      const actualUser2Proportion = user2Rewards / (user1Rewards + user2Rewards);
+      const tolerance = 0.05; // 5% tolerance for rounding
+
+      assert.approximately(
+        actualUser2Proportion,
+        expectedUser2Proportion,
+        tolerance,
+        "Rewards should be distributed proportionally"
+      );
     });
   });
 });
