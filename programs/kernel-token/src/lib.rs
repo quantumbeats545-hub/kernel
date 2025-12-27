@@ -1491,3 +1491,6 @@ pub enum KernelError {
     #[msg("Authority transfer was cancelled")]
     AuthorityTransferCancelled,
 }
+
+#[cfg(test)]
+mod property_tests;
