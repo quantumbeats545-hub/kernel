@@ -6,10 +6,10 @@ We take security vulnerabilities seriously. If you discover a security issue, pl
 
 ### Contact
 
-**Email**: security@sovereignlabs.com.au
+**Email**: security@freedomlabs.com.au
 
 For urgent issues affecting user funds:
-**Emergency**: security@sovereignlabs.com.au (subject: URGENT)
+**Emergency**: security@freedomlabs.com.au (subject: URGENT)
 
 ### Scope
 
@@ -46,7 +46,7 @@ We offer bounties for responsibly disclosed vulnerabilities:
 
 ### Process
 
-1. Email security@sovereignlabs.io with:
+1. Email security@freedomlabs.io with:
    - Description of the vulnerability
    - Steps to reproduce
    - Proof of concept (code or transaction)

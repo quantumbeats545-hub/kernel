@@ -23,7 +23,7 @@ $KERNEL is a meme coin on Solana with:
 
 ### 1. Install Dependencies
 ```bash
-cd ~/sovereign-labs/kernel
+cd ~/freedom-labs/kernel
 yarn install
 ```
 

@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://kernel.sovereignlabs.io'),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://kernel.freedomlabs.io'),
   title: {
     default: "$KERNEL - The Core of Crypto Security",
     template: "%s | $KERNEL",
@@ -22,7 +22,7 @@ export const metadata: Metadata = {
   description: "Colonel Kernel's meme coin on Solana. Stake KERNEL tokens to earn reflections from every transfer. 5% fee: 2% reflections, 2% LP, 1% burn.",
   keywords: ["KERNEL", "meme coin", "Solana", "staking", "reflections", "DeFi", "crypto"],
   authors: [{ name: "Colonel Kernel" }],
-  creator: "Sovereign Labs",
+  creator: "Freedom Labs",
   openGraph: {
     type: "website",
     locale: "en_US",

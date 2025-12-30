@@ -205,9 +205,9 @@ let _decimals = ctx.accounts.token_mint.decimals;
 
 ## Test Coverage Assessment
 
-**Current Status:** ✅ All 29 tests passing (2025-12-26)
+**Current Status:** ✅ All 32 tests passing (2025-12-27)
 
-**Test File:** `tests/kernel-token.ts` (~1,400 lines)
+**Test File:** `tests/kernel-token.ts` (~1,100 lines)
 
 **Test Categories:**
 - Initialize (2 tests)
@@ -215,16 +215,20 @@ let _decimals = ctx.accounts.token_mint.decimals;
 - Unstaking (2 tests)
 - Reflections (3 tests)
 - Burn (1 test)
-- Admin Functions (6 tests) - includes authority transfer timelock
+- Admin Functions (9 tests) - includes authority transfer timelock security tests
 - Airdrop Registration (1 test)
-- Fee Proposal Timelock (4 tests) ✅ NEW
-- LP Vault Operations (6 tests) ✅ NEW
-- Multi-User Reflections (1 test) ✅ NEW
+- Fee Proposal Timelock (4 tests)
+- LP Vault Operations (6 tests)
+- Multi-User Reflections (1 test)
+
+**Authority Transfer Timelock Tests (2025-12-27):**
+- prevents non-authority from proposing authority transfer
+- prevents non-authority from cancelling authority transfer
+- prevents executing a cancelled authority transfer
 
 **Remaining Test Coverage Opportunities:**
 - Edge cases for precision loss in large reward calculations
 - Authority transfer execution after timelock expires (requires time manipulation)
-- LP deployment withdrawal marking
 
 ---
 
@@ -250,8 +254,8 @@ The kernel-token program implements a solid staking and reflection mechanism wit
 
 No critical vulnerabilities were identified. The program follows Anchor best practices with proper PDA derivation, checked arithmetic, and authority validation.
 
-**Test Coverage:** 29 tests covering all major functionality including fee proposal timelocks, LP vault operations, and multi-user reflection distribution.
+**Test Coverage:** 32 tests covering all major functionality including fee proposal timelocks, LP vault operations, multi-user reflection distribution, and authority transfer timelock security.
 
 ---
 
-*Review conducted as part of Sovereign Labs security audit initiative.*
+*Review conducted as part of Freedom Labs security audit initiative.*

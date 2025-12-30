@@ -3,7 +3,7 @@
 **Prepared For**: External Security Auditors
 **Version**: 1.0
 **Date**: December 27, 2025
-**Prepared By**: Sovereign Labs Security Team
+**Prepared By**: Freedom Labs Security Team
 
 ---
 
@@ -262,12 +262,12 @@ test result: ok. 29 passed; 0 failed
 
 ### Technical Questions
 
-**Email**: security@sovereignlabs.com.au
+**Email**: security@freedomlabs.com.au
 **Response Time**: 48 hours
 
 ### Emergency Contact
 
-**Email**: security@sovereignlabs.com.au (subject: URGENT)
+**Email**: security@freedomlabs.com.au (subject: URGENT)
 **Response Time**: 4 hours
 
 ---
